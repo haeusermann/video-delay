@@ -2,18 +2,25 @@
 <html lang="de">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <title>Video Feedback Delay</title>
-    
+
     <!-- PWA Meta Tags -->
     <link rel="manifest" href="manifest.json">
     <meta name="theme-color" content="#000000">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-    <link rel="apple-touch-icon" href="https://cdn-icons-png.flaticon.com/512/3221/3221897.png">
+    <link rel="apple-touch-icon" href="logo.png">
 
-    <script src="https://cdn.tailwindcss.com"></script>
     <style>
+        /* Minimaler Reset (ersetzt Tailwind: keine externe Abhängigkeit, offline-fähig) */
+        *, *::before, *::after { box-sizing: border-box; }
+        button, input { font: inherit; color: inherit; margin: 0; }
+        button { background: none; border: 0; padding: 0; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+        h2, p, ul { margin: 0; }
+        img, svg { display: block; }
+        [hidden] { display: none !important; }
+
         body, html {
             margin: 0;
             padding: 0;
@@ -24,35 +31,41 @@
             color: white;
             font-family: sans-serif;
             touch-action: none;
+            -webkit-user-select: none;
+            user-select: none;
         }
-        #video-container {
-            position: relative;
-            width: 100vw;
-            height: 100vh;
+
+        /* ============================================================= */
+        /* LAYOUT: fixed statt 100vh (iOS-Adressleiste), Ansichten       */
+        /* im Hochformat übereinander, im Querformat nebeneinander       */
+        /* ============================================================= */
+        #app { position: fixed; inset: 0; background: #000; }
+        #workbench {
+            position: absolute;
+            inset: 0;
             display: flex;
-            justify-content: center;
-            align-items: center;
+            flex-direction: column;
+            gap: 2px;
+            background: #000;
+        }
+        @media (min-aspect-ratio: 1/1) {
+            #workbench { flex-direction: row; }
+        }
+        .pane {
+            position: relative;
+            flex: 1 1 0;
+            min-width: 0;
+            min-height: 0;
+            overflow: hidden;
             background: #111;
         }
-        canvas {
-            width: 100%;
-            height: 100%;
-            object-fit: contain;
-        }
-        .overlay {
-            position: absolute;
-            pointer-events: none;
-            z-index: 10;
-        }
-        .controls {
-            pointer-events: auto;
-        }
-        .grid-line {
-            position: absolute;
-            background: rgba(255, 255, 255, 0.25);
-            pointer-events: none;
-        }
-        #status-msg {
+        .pane[hidden] { display: none; }
+        .pane canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+
+        .grid-overlay { position: absolute; inset: 0; pointer-events: none; z-index: 5; }
+        .grid-line { position: absolute; background: rgba(255, 255, 255, 0.25); pointer-events: none; }
+
+        .status-msg {
             position: absolute;
             top: 50%;
             left: 50%;
@@ -62,17 +75,132 @@
             padding: 20px;
             border-radius: 15px;
             pointer-events: none;
+            max-width: 80%;
+            z-index: 6;
         }
-        /* Styling für den Delay-Slider */
-        #delay-slider {
+        .status-msg[hidden] { display: none; }
+        .spinner {
+            width: 32px;
+            height: 32px;
+            margin: 0 auto 8px;
+            border-radius: 9999px;
+            border-bottom: 2px solid #fff;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        /* Globale Buttons: Abstand zu Notch / abgerundeten Ecken (safe area) */
+        .top-left, .top-right {
+            position: absolute;
+            top: max(16px, env(safe-area-inset-top));
+            display: flex;
+            gap: 12px;
+            z-index: 20;
+        }
+        .top-left { left: max(16px, env(safe-area-inset-left)); flex-direction: column; }
+        .top-right { right: max(16px, env(safe-area-inset-right)); }
+
+        /* Runde Glas-Buttons */
+        .glass-btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            background: rgba(0, 0, 0, 0.4);
+            padding: 16px;
+            border-radius: 9999px;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            color: #fff;
+            cursor: pointer;
+        }
+        .glass-btn:active { background: rgba(255, 255, 255, 0.2); }
+        .glass-btn[hidden] { display: none; }
+        .glass-btn svg { width: 24px; height: 24px; }
+        /* Zwei-Ansichten-Button aktiv: hellblau */
+        .glass-btn.on { background: #60a5fa; color: #0f172a; border-color: rgba(255, 255, 255, 0.35); }
+
+        /* ============================================================= */
+        /* STEUERUNG PRO ANSICHT                                         */
+        /* ============================================================= */
+        .pane-controls {
+            position: absolute;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            z-index: 10;
+            display: flex;
+            flex-direction: column;
+            gap: 14px;
+            padding: 16px max(16px, env(safe-area-inset-right)) max(28px, calc(env(safe-area-inset-bottom) + 12px)) max(16px, env(safe-area-inset-left));
+            background: linear-gradient(to top, rgba(0,0,0,0.9), rgba(0,0,0,0.4) 60%, rgba(0,0,0,0));
+        }
+        .ctl-row { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; }
+        .ctl-group { display: flex; align-items: center; gap: 12px; }
+        .timer-group { display: flex; align-items: flex-start; gap: 8px; }
+        .delay-timer {
+            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+            font-size: 30px;
+            line-height: 1.25;
+            font-weight: 700;
+            background: rgba(0,0,0,0.6);
+            padding: 4px 18px;
+            border-radius: 12px;
+            border: 1px solid rgba(255,255,255,0.1);
+            font-variant-numeric: tabular-nums;
+        }
+        .delay-timer.frozen { border-color: rgba(250, 204, 21, 0.8); color: #fde68a; }
+        .timer-label {
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: 0.2em;
+            opacity: 0.6;
+            font-weight: 600;
+            margin: 4px 0 0 4px;
+        }
+        .reset-btn { padding: 10px; }
+        .reset-btn svg { width: 22px; height: 22px; }
+
+        .speed-btn {
+            min-width: 64px;
+            height: 58px;
+            padding: 0 16px;
+            font-size: 18px;
+            font-weight: 700;
+            font-family: ui-monospace, monospace;
+        }
+        .speed-btn.slow { color: #facc15; border-color: rgba(250, 204, 21, 0.6); }
+
+        .pause-btn {
+            width: 64px;
+            height: 64px;
+            border-radius: 9999px;
+            border: 1px solid rgba(255, 255, 255, 0.35);
+            background: #60a5fa;
+            color: #0f172a;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+            transition: transform 0.15s, background 0.15s;
+            cursor: pointer;
+        }
+        .pause-btn:active { transform: scale(0.94); background: #3b82f6; }
+        .pause-btn svg { width: 28px; height: 28px; }
+
+        .slider-row { display: flex; align-items: center; gap: 12px; font-size: 10px; font-weight: 700; }
+        .slider-row span { opacity: 0.4; }
+        .delay-slider {
             -webkit-appearance: none;
-            width: 100%;
+            appearance: none;
+            flex: 1;
+            min-width: 0;
             height: 12px;
             background: rgba(255, 255, 255, 0.2);
             border-radius: 6px;
             outline: none;
         }
-        #delay-slider::-webkit-slider-thumb {
+        .delay-slider::-webkit-slider-thumb {
             -webkit-appearance: none;
             appearance: none;
             width: 32px;
@@ -83,273 +211,1200 @@
             box-shadow: 0 0 15px rgba(0,0,0,0.6);
             border: 2px solid rgba(0,0,0,0.1);
         }
-        /* Responsives Layout für den Timer */
-        @media (max-height: 500px) {
-            #timer-wrapper { width: 30%; }
-            #delay-timer { font-size: 1.5rem; }
+        .delay-slider::-moz-range-thumb {
+            width: 32px;
+            height: 32px;
+            background: #fff;
+            border-radius: 50%;
+            border: 2px solid rgba(0,0,0,0.1);
+        }
+
+        /* Kompakt: zwei Ansichten oder wenig Höhe (Handy quer) */
+        #app.dual .top-left,
+        #app.short .top-left { flex-direction: row; }
+        #app.dual .glass-btn:not(.speed-btn):not(.reset-btn),
+        #app.short .glass-btn:not(.speed-btn):not(.reset-btn) { padding: 12px; }
+        #app.dual .glass-btn svg, #app.short .glass-btn svg { width: 22px; height: 22px; }
+        #app.dual .pane-controls,
+        #app.short .pane-controls {
+            gap: 10px;
+            padding-top: 10px;
+            padding-bottom: max(14px, calc(env(safe-area-inset-bottom) + 6px));
+        }
+        #app.dual .delay-timer, #app.short .delay-timer { font-size: 22px; padding: 2px 12px; }
+        #app.dual .speed-btn, #app.short .speed-btn { height: 46px; min-width: 54px; font-size: 16px; }
+        #app.dual .pause-btn, #app.short .pause-btn { width: 50px; height: 50px; }
+        #app.dual .pause-btn svg, #app.short .pause-btn svg { width: 24px; height: 24px; }
+        #app.dual .reset-btn, #app.short .reset-btn { padding: 8px; }
+        #app.dual .delay-slider::-webkit-slider-thumb,
+        #app.short .delay-slider::-webkit-slider-thumb { width: 26px; height: 26px; }
+        /* Zwei Ansichten im Querformat: die Steuerung der linken Ansicht
+           braucht rechts keinen Notch-Abstand, die der rechten links keinen */
+        @media (min-aspect-ratio: 1/1) {
+            #app.dual .pane:first-child .pane-controls { padding-right: 16px; }
+            #app.dual .pane:last-child .pane-controls { padding-left: 16px; }
+        }
+
+        /* ============================================================= */
+        /* SPLASH SCREEN - Logo beim Start, blendet nach 2 s aus         */
+        /* ============================================================= */
+        #splash-screen {
+            position: fixed;
+            inset: 0;
+            background-color: #000;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 9999;
+            transition: opacity 0.5s ease-out, visibility 0.5s;
+        }
+        #splash-screen img { max-width: 250px; width: 60%; height: auto; object-fit: contain; }
+        #splash-screen.fade { opacity: 0; visibility: hidden; }
+
+        /* ============================================================= */
+        /* OVERLAY SCREENS - Willkommen + Info (wie Video Analyser)      */
+        /* ============================================================= */
+        .overlay-screen {
+            position: fixed;
+            inset: 0;
+            z-index: 9998;
+            background: radial-gradient(ellipse at top, #0f1f3a 0%, #000 70%);
+            color: #e2e8f0;
+            display: flex;
+            justify-content: center;
+            align-items: safe center;
+            overflow-y: auto;
+            /* body disables touch gestures - allow vertical scrolling here */
+            touch-action: pan-y;
+            -webkit-user-select: text;
+            user-select: text;
+            padding: max(24px, env(safe-area-inset-top)) max(20px, env(safe-area-inset-right)) max(24px, env(safe-area-inset-bottom)) max(20px, env(safe-area-inset-left));
+            box-sizing: border-box;
+            transition: opacity 0.4s ease-out;
+            color-scheme: dark;
+            scrollbar-width: thin;
+        }
+        .overlay-screen.closing { opacity: 0; pointer-events: none; }
+        .overlay-screen[hidden] { display: none; }
+
+        /* Button stays visible at the bottom while scrolling */
+        .wn-footer {
+            position: sticky;
+            bottom: 0;
+            padding: 18px 0 4px;
+            background: linear-gradient(to top, #000 55%, rgba(0, 0, 0, 0));
+        }
+        .wn-card { width: 100%; max-width: 520px; margin: auto 0; text-align: center; }
+
+        /* Language switcher DE / EN / FR / IT */
+        .wn-lang { display: flex; justify-content: flex-end; gap: 6px; margin-bottom: 4px; }
+        .wn-lang button {
+            min-width: 40px;
+            height: 30px;
+            padding: 0 8px;
+            border-radius: 8px;
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            background: rgba(15, 23, 42, 0.8);
+            color: #cbd5e1;
+            font-size: 13px;
+            font-weight: 700;
+            letter-spacing: 0.05em;
+            cursor: pointer;
+            transition: background 0.15s, color 0.15s;
+        }
+        .wn-lang button.active {
+            background: #60a5fa;
+            border-color: rgba(255, 255, 255, 0.35);
+            color: #0f172a;
+        }
+
+        /* Tailwind preflight makes images block elements - center explicitly */
+        .wn-logo { width: 76px; height: 76px; display: block; margin: 0 auto; }
+        .wn-card h2 { margin: 12px 0 4px; font-size: 22px; font-weight: 700; color: #fff; letter-spacing: 0.01em; }
+        .wn-subtitle { margin: 0 0 20px; font-size: 14px; color: #94a3b8; }
+
+        .wn-list { list-style: none; margin: 0; padding: 0; text-align: left; display: flex; flex-direction: column; gap: 10px; }
+        .wn-list li {
+            display: flex;
+            align-items: flex-start;
+            gap: 12px;
+            background: rgba(15, 23, 42, 0.75);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 12px;
+            padding: 10px 12px;
+        }
+        .wn-icon {
+            flex-shrink: 0;
+            width: 36px;
+            height: 36px;
+            border-radius: 10px;
+            background: rgba(96, 165, 250, 0.14);
+            color: #60a5fa;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .wn-icon svg { width: 20px; height: 20px; }
+        .wn-list strong { display: block; font-size: 14px; color: #fff; margin-bottom: 2px; }
+        .wn-list span { display: block; font-size: 13px; line-height: 1.4; color: #94a3b8; }
+
+        .wn-start {
+            height: 48px;
+            padding: 0 22px 0 26px;
+            border-radius: 24px;
+            border: 1px solid rgba(255, 255, 255, 0.35);
+            background: #60a5fa;
+            color: #0f172a;
+            font-size: 16px;
+            font-weight: 700;
+            letter-spacing: 0.03em;
+            display: inline-flex;
+            align-items: center;
+            gap: 10px;
+            cursor: pointer;
+            box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+            transition: transform 0.15s, background 0.15s;
+        }
+        .wn-start:active { transform: scale(0.96); background: #3b82f6; }
+        .wn-start svg { width: 22px; height: 22px; }
+
+        /* Wide screens: two columns; an odd last card spans both */
+        @media (min-width: 760px) {
+            .wn-card { max-width: 820px; }
+            .wn-list { display: grid; grid-template-columns: 1fr 1fr; }
+            .wn-list li:last-child:nth-child(odd) { grid-column: 1 / -1; }
         }
     </style>
 </head>
 <body>
 
-<div id="video-container">
-    <video id="live-video" autoplay playsinline muted class="hidden"></video>
-    <canvas id="display-canvas"></canvas>
+<!-- SPLASH SCREEN: Logo beim Start -->
+<div id="splash-screen">
+    <img src="logo.png" alt="Häusermanns Video Feedback App">
+</div>
 
-    <div id="status-msg" class="hidden">
-        <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-white mx-auto mb-2"></div>
-        <p id="status-text">Initialisiere Puffer...</p>
+<div id="app">
+    <video id="live-video" autoplay playsinline muted style="display:none"></video>
+
+    <!-- Ansichten (werden per JS aus dem Template erzeugt) -->
+    <main id="workbench"></main>
+
+    <!-- Globale Buttons oben links -->
+    <div class="top-left">
+        <button id="fullscreen-btn" class="glass-btn" data-ui-title="fullscreen">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>
+        </button>
+        <button id="split-btn" class="glass-btn" data-ui-title="split" aria-pressed="false">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path id="split-line" d="M12 4v16"/></svg>
+        </button>
+        <button id="grid-btn" class="glass-btn" data-ui-title="grid">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><line x1="9" y1="3" x2="9" y2="21"/><line x1="15" y1="3" x2="15" y2="21"/></svg>
+        </button>
+        <button id="info-btn" class="glass-btn" data-ui-title="info" aria-haspopup="dialog">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 11v6"/><path d="M12 7.5h.01" stroke-width="3"/></svg>
+        </button>
     </div>
 
-    <div id="grid-overlay" class="overlay inset-0 hidden"></div>
-
-    <!-- Obere Buttons -->
-    <div class="overlay top-4 left-4 flex flex-col gap-3 controls">
-        <button id="fullscreen-btn" class="bg-black/40 p-4 rounded-full border border-white/20 backdrop-blur-md active:bg-white/20">
-            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>
-        </button>
-        <button id="grid-btn" class="bg-black/40 p-4 rounded-full border border-white/20 backdrop-blur-md active:bg-white/20">
-            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><line x1="9" y1="3" x2="9" y2="21"/><line x1="15" y1="3" x2="15" y2="21"/></svg>
+    <!-- Oben rechts: Kamera wechseln (nur sichtbar, wenn es mehrere Kameras gibt) -->
+    <div class="top-right">
+        <button id="camera-btn" class="glass-btn" data-ui-title="camera" hidden>
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8a1 1 0 0 1 1-1h3l2-2h6l2 2h3a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z"/><path d="M8.5 13a3.5 3.5 0 0 1 6-2.4M15.5 13a3.5 3.5 0 0 1-6 2.4"/><path d="M14.8 8.6v2.2h-2.2M9.2 17.4v-2.2h2.2"/></svg>
         </button>
     </div>
+</div>
 
-    <!-- Untere Steuerung -->
-    <div class="overlay bottom-0 left-0 w-full p-4 pb-8 bg-gradient-to-t from-black/90 via-black/40 to-transparent controls">
-        <div class="w-full flex flex-col items-start gap-4">
-            
-            <!-- Timer Anzeige: Flexibel angepasst -->
-            <div id="timer-wrapper" class="w-1/2 sm:w-1/3 flex flex-col items-start">
-                <div id="delay-timer" class="text-3xl font-mono font-bold drop-shadow-2xl bg-black/60 px-5 py-1 rounded-xl border border-white/10 backdrop-blur-sm">
-                    5.0s
+<!-- Vorlage für eine Ansicht: eigenes Bild, eigene Verzögerung, eigene Steuerung -->
+<template id="pane-template">
+    <section class="pane">
+        <canvas></canvas>
+        <div class="grid-overlay"></div>
+        <div class="status-msg" hidden>
+            <div class="spinner"></div>
+            <p class="status-text"></p>
+        </div>
+        <div class="pane-controls">
+            <div class="ctl-row">
+                <div class="timer-group">
+                    <div>
+                        <div class="delay-timer">5.0s</div>
+                        <div class="timer-label">Verzögerung</div>
+                    </div>
+                    <button class="glass-btn reset-btn" data-ui-title="reset" hidden>
+                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/></svg>
+                    </button>
                 </div>
-                <div class="text-[10px] uppercase tracking-[0.2em] opacity-60 font-semibold mt-1 ml-1">Verzögerung</div>
+                <div class="ctl-group">
+                    <button class="glass-btn speed-btn" data-ui-title="speed">1x</button>
+                    <button class="pause-btn" type="button">
+                        <svg class="icon-pause" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg>
+                        <svg class="icon-play" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" style="display:none"><path d="M8 5.5v13a1 1 0 0 0 1.5.86l10.5-6.5a1 1 0 0 0 0-1.72L9.5 4.64A1 1 0 0 0 8 5.5z"/></svg>
+                    </button>
+                </div>
             </div>
+            <div class="slider-row">
+                <span>0s</span>
+                <input type="range" class="delay-slider" min="0" max="60" step="0.1" value="5">
+                <span>60s</span>
+            </div>
+        </div>
+    </section>
+</template>
 
-            <!-- Slider: Nutzt volle Breite -->
-            <div class="w-full flex items-center gap-3">
-                <span class="text-[10px] font-bold opacity-40">0s</span>
-                <input type="range" id="delay-slider" min="0" max="60" step="0.1" value="5">
-                <span class="text-[10px] font-bold opacity-40">60s</span>
-            </div>
+<!-- WILLKOMMEN: nach dem Splash, einmal pro Version. Deutsch steht im HTML, andere Sprachen aus WHATS_NEW_TEXT (JS) -->
+<div id="whats-new" class="overlay-screen" role="dialog" aria-modal="true" aria-labelledby="wn-title" lang="de">
+    <div class="wn-card">
+        <div class="wn-lang" role="group" aria-label="Sprache / Language">
+            <button type="button" data-lang="de" lang="de" title="Deutsch" aria-pressed="true" class="active">DE</button>
+            <button type="button" data-lang="en" lang="en" title="English" aria-pressed="false">EN</button>
+            <button type="button" data-lang="fr" lang="fr" title="Français" aria-pressed="false">FR</button>
+            <button type="button" data-lang="it" lang="it" title="Italiano" aria-pressed="false">IT</button>
+        </div>
+        <img src="logo.png" alt="" class="wn-logo">
+        <h2 id="wn-title" data-i18n="title">Willkommen</h2>
+        <p class="wn-subtitle" data-i18n="subtitle">Neu in Version 1.1 – die wichtigsten Neuerungen auf einen Blick</p>
+
+        <ul class="wn-list" id="wn-list"></ul>
+
+        <div class="wn-footer">
+            <button id="wn-start" class="wn-start" type="button">
+                <span data-i18n="start">Los geht's</span>
+                <svg fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- INFO-BILDSCHIRM: Texte kommen pro Sprache aus HELP_TEXT (JS) -->
+<div id="help-screen" class="overlay-screen" role="dialog" aria-modal="true" aria-labelledby="help-title" lang="de" hidden>
+    <div class="wn-card">
+        <div class="wn-lang" role="group" aria-label="Sprache / Language">
+            <button type="button" data-lang="de" lang="de" title="Deutsch" aria-pressed="true" class="active">DE</button>
+            <button type="button" data-lang="en" lang="en" title="English" aria-pressed="false">EN</button>
+            <button type="button" data-lang="fr" lang="fr" title="Français" aria-pressed="false">FR</button>
+            <button type="button" data-lang="it" lang="it" title="Italiano" aria-pressed="false">IT</button>
+        </div>
+        <img src="logo.png" alt="" class="wn-logo">
+        <h2 id="help-title" data-help="title">Bedienung</h2>
+        <p class="wn-subtitle" data-help="subtitle">So funktioniert die Video Feedback App</p>
+
+        <ul class="wn-list" id="help-list"></ul>
+
+        <div class="wn-footer">
+            <button id="help-close" class="wn-start" type="button">
+                <span data-help="close">Verstanden</span>
+                <svg fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>
+            </button>
         </div>
     </div>
 </div>
 
 <script>
     /**
-     * SERVICE WORKER REGISTRIERUNG
+     * SERVICE WORKER (sw.js): speichert die App für den Offline-Betrieb.
+     * Funktioniert nur über https:// oder localhost.
      */
     if ('serviceWorker' in navigator) {
         window.addEventListener('load', () => {
-            const swCode = `
-                self.addEventListener('install', e => self.skipWaiting());
-                self.addEventListener('fetch', e => e.respondWith(fetch(e.request)));
-            `;
-            const blob = new Blob([swCode], { type: 'text/javascript' });
-            const swUrl = URL.createObjectURL(blob);
-            navigator.serviceWorker.register(swUrl).catch(err => console.log("SW error", err));
+            navigator.serviceWorker.register('./sw.js').catch(err => console.log('SW error', err));
         });
     }
 
     const CONFIG = {
-        maxDelaySec: 60,             
-        minDelaySec: 0,              
-        fps: 30,                     
-        touchSensitivityX: 0.1,      
-        zoomSensitivity: 0.005,      
-        panSensitivity: 1.8,         
-        maxZoom: 8.0,                
-        minZoom: 1.0                 
+        maxDelaySec: 60,
+        fps: 30,
+        touchSensitivityX: 0.1,      // s pro Pixel beim Wischen (laufend)
+        pausedSensitivityX: 0.01,    // s pro Pixel beim Wischen im Standbild (feiner)
+        zoomSensitivity: 0.005,
+        panSensitivity: 1.8,
+        maxZoom: 8.0,
+        minZoom: 1.0,
+        speeds: [1, 0.5, 0.25],
+        defaultDelays: [5, 10],      // Ansicht 1 / Ansicht 2
+        protectMs: 15000,            // Bilder rund um ein Standbild so lange behalten
+        maxFrameSide: 960,           // Bilder im Puffer auf diese Länge (längste Seite) verkleinern
+        reserveSec: 5                // Puffer = grösste Verzögerung + diese Reserve zum Zurückwischen
     };
+    const MAX_BUFFER_MS = (CONFIG.maxDelaySec + 10) * 1000;
 
+    /*
+     * Zeitmodell: Alle Ansichten teilen sich einen Puffer mit Kamerabildern
+     * (Zeitstempel = performance.now()). Jede Ansicht zeigt das Bild bei
+     * refTime - lag, mit refTime = jetzt (laufend) oder dem Pause-Zeitpunkt
+     * (Standbild). Wischen ändert lag, Zeitlupe lässt lag wachsen, der
+     * Schieber der Ansicht setzt lag = delaySec.
+     */
     const state = {
-        delaySec: 5.0,               
-        currentZoom: 1.0,
-        panX: 0,                     
-        panY: 0,                     
-        gridMode: 0, 
-        buffer: [],                  
-        scrubbingOffset: 0, 
-        lastRequestTime: 0
+        views: 1,
+        gridMode: 0,
+        facing: 'environment',
+        mirror: false,
+        buffer: [],          // { bitmap, time, mirror }
+        lastCapture: 0
     };
 
+    const appEl = document.getElementById('app');
+    const workbench = document.getElementById('workbench');
     const video = document.getElementById('live-video');
-    const canvas = document.getElementById('display-canvas');
-    const ctx = canvas.getContext('2d', { alpha: false });
-    const delayTimer = document.getElementById('delay-timer');
-    const delaySlider = document.getElementById('delay-slider');
-    const gridOverlay = document.getElementById('grid-overlay');
-    const statusMsg = document.getElementById('status-msg');
-    const statusText = document.getElementById('status-text');
+    const cameraBtn = document.getElementById('camera-btn');
+    const splitBtn = document.getElementById('split-btn');
 
-    async function initCamera() {
-        try {
-            const stream = await navigator.mediaDevices.getUserMedia({ 
-                video: { 
-                    facingMode: 'environment',
-                    width: { ideal: 1920 },
-                    height: { ideal: 1080 }
-                }, 
-                audio: false 
-            });
-            video.srcObject = stream;
-            video.onloadedmetadata = () => {
-                video.play();
-                requestAnimationFrame(renderLoop);
-            };
-        } catch (err) {
-            alert("Kamera-Fehler: " + err.message);
+    // =================================================================
+    // TEXTE (DE / EN / FR / IT)
+    // =================================================================
+    const ICONS = {
+        timer: '<circle cx="12" cy="13" r="8"/><path d="M12 9v4l2.5 2.5M9 2h6"/>',
+        scrub: '<path d="M4 12h16M8 8l-4 4 4 4M16 8l4 4-4 4"/>',
+        pause: '<circle cx="12" cy="12" r="9"/><path d="M10 9v6M14 9v6"/>',
+        slow: '<path d="M12 21a9 9 0 1 1 9-9"/><path d="M12 7v5l3 2"/><path d="M17 17h4M17 20h2"/>',
+        split: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M12 4v16"/>',
+        zoom: '<circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5L21 21M10.5 8v5M8 10.5h5"/>',
+        camera: '<path d="M3 8a1 1 0 0 1 1-1h3l2-2h6l2 2h3a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z"/><path d="M8.5 13a3.5 3.5 0 0 1 6-2.4M15.5 13a3.5 3.5 0 0 1-6 2.4"/>',
+        grid: '<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M3 15h18M9 3v18M15 3v18"/>',
+        fullscreen: '<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>',
+        sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
+        save: '<path d="M5 3h11l3 3v13a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/><path d="M8 3v5h7V3M7 21v-7h10v7"/>',
+        rotate: '<rect x="7" y="2" width="10" height="20" rx="2"/><path d="M2 12a10 10 0 0 0 4 8M22 12a10 10 0 0 0-4-8"/>',
+    };
+
+    const WHATS_NEW_VERSION = '1.1';
+    const WHATS_NEW_ITEMS = [['split', 'split'], ['pause', 'pause'], ['slow', 'slow'], ['camera', 'camera'], ['awake', 'sun'], ['settings', 'save']];
+    const WHATS_NEW_TEXT = {
+        de: {
+            title: 'Willkommen', subtitle: 'Neu in Version 1.1 – die Bedienung erklärt der ⓘ-Button', start: 'Los geht\'s',
+            split: ['Zwei Ansichten', 'Dieselbe Kamera zweimal, jede Ansicht mit eigener Verzögerung – z. B. 5 s und 15 s.'],
+            pause: ['Pause & Standbild', 'Das Bild anhalten und Bild für Bild durch die letzten Sekunden wischen.'],
+            slow: ['Zeitlupe', 'Die verzögerte Aufnahme mit ½- oder ¼-Tempo ansehen.'],
+            camera: ['Kamera wechseln', 'Zwischen Rück- und Frontkamera umschalten – die Frontkamera wird gespiegelt.'],
+            awake: ['Bildschirm bleibt an', 'Das Gerät geht während des Trainings nicht mehr in den Ruhezustand.'],
+            settings: ['Einstellungen bleiben gespeichert', 'Verzögerungen, Ansichten, Raster, Kamera und Sprache sind beim nächsten Start wieder da.'],
+        },
+        en: {
+            title: 'Welcome', subtitle: 'New in version 1.1 – the ⓘ button explains how to use it', start: 'Let\'s go',
+            split: ['Two views', 'The same camera twice, each view with its own delay – e.g. 5 s and 15 s.'],
+            pause: ['Pause & freeze frame', 'Freeze the picture and swipe frame by frame through the last seconds.'],
+            slow: ['Slow motion', 'Watch the delayed recording at ½ or ¼ speed.'],
+            camera: ['Switch camera', 'Switch between rear and front camera – the front camera is mirrored.'],
+            awake: ['Screen stays on', 'The device no longer goes to sleep during training.'],
+            settings: ['Settings are remembered', 'Delays, views, grid, camera and language are restored next time.'],
+        },
+        fr: {
+            title: 'Bienvenue', subtitle: 'Nouveau dans la version 1.1 – le bouton ⓘ explique l’utilisation', start: 'C’est parti',
+            split: ['Deux vues', 'La même caméra deux fois, chaque vue avec son propre décalage – p. ex. 5 s et 15 s.'],
+            pause: ['Pause et arrêt sur image', 'Figer l’image et parcourir les dernières secondes image par image.'],
+            slow: ['Ralenti', 'Regarder l’enregistrement différé à vitesse ½ ou ¼.'],
+            camera: ['Changer de caméra', 'Passer de la caméra arrière à la caméra avant – la caméra avant est affichée en miroir.'],
+            awake: ['L’écran reste allumé', 'L’appareil ne se met plus en veille pendant l’entraînement.'],
+            settings: ['Réglages mémorisés', 'Décalages, vues, grille, caméra et langue sont conservés au prochain démarrage.'],
+        },
+        it: {
+            title: 'Benvenuto', subtitle: 'Novità della versione 1.1 – il pulsante ⓘ spiega come usarla', start: 'Iniziamo',
+            split: ['Due viste', 'La stessa fotocamera due volte, ogni vista con il proprio ritardo – ad es. 5 s e 15 s.'],
+            pause: ['Pausa e fermo immagine', 'Bloccare l’immagine e scorrere fotogramma per fotogramma gli ultimi secondi.'],
+            slow: ['Rallentatore', 'Guardare la registrazione ritardata a velocità ½ o ¼.'],
+            camera: ['Cambiare fotocamera', 'Passare dalla fotocamera posteriore a quella anteriore – quella anteriore è a specchio.'],
+            awake: ['Lo schermo resta acceso', 'Il dispositivo non va più in standby durante l’allenamento.'],
+            settings: ['Impostazioni memorizzate', 'Ritardi, viste, griglia, fotocamera e lingua vengono ripristinati all’avvio successivo.'],
+        },
+    };
+
+    const HELP_ITEMS = [['delay', 'timer'], ['split', 'split'], ['scrub', 'scrub'], ['pause', 'pause'], ['slow', 'slow'],
+                        ['zoom', 'zoom'], ['camera', 'camera'], ['grid', 'grid'], ['rotate', 'rotate'], ['fullscreen', 'fullscreen']];
+    const HELP_TEXT = {
+        de: {
+            title: 'Bedienung', subtitle: 'So funktioniert die Video Feedback App', close: 'Verstanden',
+            delay: ['Verzögerung einstellen', 'Mit dem Schieber unten wählst du, wie viele Sekunden das Kamerabild zeitversetzt erscheint (0 bis 60 s). Nach dem Start dauert es so lange, bis der Puffer gefüllt ist.'],
+            split: ['Zwei Ansichten', 'Der Button mit dem geteilten Rechteck zeigt dieselbe Kamera zweimal. Jede Ansicht hat ihren eigenen Schieber, eigene Pause, Zeitlupe und Zoom – so siehst du z. B. eine Bewegung nach 5 s und nochmals nach 15 s.'],
+            scrub: ['Zeitlich vor- und zurückfahren', 'Mit einem Finger nach links wischen geht weiter zurück, nach rechts näher an die Gegenwart. Der runde Pfeil neben der Zeitanzeige stellt die eingestellte Verzögerung wieder her.'],
+            pause: ['Pause & Standbild', 'Der blaue Button hält das Bild an. Im Standbild fährt Wischen fein durch die Aufnahme. Nochmals drücken spielt an derselben Stelle weiter. Am Computer: Leertaste und Pfeiltasten ← / → für die zuletzt berührte Ansicht.'],
+            slow: ['Zeitlupe', 'Der Tempo-Button wechselt zwischen 1x, ½x und ¼x. In Zeitlupe wächst die Verzögerung laufend – der runde Pfeil springt zurück auf die eingestellte Verzögerung und 1x.'],
+            zoom: ['Zoomen & Verschieben', 'Zwei Finger auseinanderziehen zum Zoomen, mit zwei Fingern den Ausschnitt verschieben. Jede Ansicht hat ihren eigenen Zoom.'],
+            camera: ['Kamera wechseln', 'Der Kamera-Button oben rechts wechselt zwischen Rück- und Frontkamera. Die Frontkamera wird wie ein Spiegel angezeigt.'],
+            grid: ['Hilfsraster', 'Der Raster-Button blendet ein Raster mit 4, 6, 8 oder 10 Feldern ein, um Haltung und Bewegung zu beurteilen. Nochmals drücken schaltet weiter, am Schluss aus.'],
+            rotate: ['Hoch- und Querformat', 'Das Gerät einfach drehen: Das ganze Bild bleibt sichtbar, zwei Ansichten stehen hochkant übereinander und quer nebeneinander.'],
+            fullscreen: ['Vollbild & Bildschirm', 'Der Vollbild-Button nutzt den ganzen Bildschirm. Der Bildschirm bleibt an, solange die App offen ist. Auf dem iPhone die App über «Teilen › Zum Home-Bildschirm» hinzufügen.'],
+        },
+        en: {
+            title: 'How to use', subtitle: 'How the Video Feedback App works', close: 'Got it',
+            delay: ['Set the delay', 'Use the slider at the bottom to choose how many seconds late the camera image appears (0 to 60 s). After starting, it takes that long until the buffer is filled.'],
+            split: ['Two views', 'The button with the split rectangle shows the same camera twice. Each view has its own slider, pause, slow motion and zoom – e.g. see a movement after 5 s and again after 15 s.'],
+            scrub: ['Move back and forth in time', 'Swipe left with one finger to go further back, right to get closer to the present. The round arrow next to the time display restores the set delay.'],
+            pause: ['Pause & freeze frame', 'The blue button freezes the picture. While frozen, swiping moves finely through the recording. Press again to continue from the same point. On a computer: space bar and arrow keys ← / → for the view touched last.'],
+            slow: ['Slow motion', 'The speed button switches between 1x, ½x and ¼x. In slow motion the delay keeps growing – the round arrow jumps back to the set delay and 1x.'],
+            zoom: ['Zoom & move', 'Spread two fingers to zoom, and move the view with two fingers. Each view has its own zoom.'],
+            camera: ['Switch camera', 'The camera button at the top right switches between rear and front camera. The front camera is shown like a mirror.'],
+            grid: ['Grid', 'The grid button overlays a grid of 4, 6, 8 or 10 cells to judge posture and movement. Press again to step on; the last press turns it off.'],
+            rotate: ['Portrait and landscape', 'Just rotate the device: the whole picture stays visible; two views are stacked in portrait and side by side in landscape.'],
+            fullscreen: ['Full screen & display', 'The full-screen button uses the whole screen. The screen stays on while the app is open. On iPhone, add the app via “Share › Add to Home Screen”.'],
+        },
+        fr: {
+            title: 'Mode d’emploi', subtitle: 'Comment fonctionne l’app Video Feedback', close: 'Compris',
+            delay: ['Régler le décalage', 'Avec le curseur en bas, choisissez de combien de secondes l’image de la caméra est retardée (0 à 60 s). Après le démarrage, il faut attendre ce temps pour que le tampon se remplisse.'],
+            split: ['Deux vues', 'Le bouton au rectangle partagé affiche deux fois la même caméra. Chaque vue a son propre curseur, sa pause, son ralenti et son zoom – p. ex. voir un mouvement après 5 s puis après 15 s.'],
+            scrub: ['Avancer et reculer dans le temps', 'Glissez un doigt vers la gauche pour remonter plus loin, vers la droite pour vous rapprocher du présent. La flèche ronde à côté du temps rétablit le décalage réglé.'],
+            pause: ['Pause et arrêt sur image', 'Le bouton bleu fige l’image. À l’arrêt, glisser parcourt finement l’enregistrement. Un nouvel appui reprend au même endroit. Sur ordinateur : barre d’espace et flèches ← / → pour la dernière vue touchée.'],
+            slow: ['Ralenti', 'Le bouton de vitesse passe de 1x à ½x et ¼x. Au ralenti, le décalage augmente en continu – la flèche ronde revient au décalage réglé et à 1x.'],
+            zoom: ['Zoomer et déplacer', 'Écartez deux doigts pour zoomer, déplacez l’image avec deux doigts. Chaque vue a son propre zoom.'],
+            camera: ['Changer de caméra', 'Le bouton caméra en haut à droite passe de la caméra arrière à la caméra avant. La caméra avant s’affiche comme un miroir.'],
+            grid: ['Grille', 'Le bouton grille affiche une grille de 4, 6, 8 ou 10 cases pour juger la posture et le mouvement. Un nouvel appui passe à la suivante, le dernier la désactive.'],
+            rotate: ['Portrait et paysage', 'Tournez simplement l’appareil : l’image reste entièrement visible ; deux vues sont superposées en portrait et côte à côte en paysage.'],
+            fullscreen: ['Plein écran et affichage', 'Le bouton plein écran utilise tout l’écran. L’écran reste allumé tant que l’app est ouverte. Sur iPhone, ajoutez l’app via « Partager › Sur l’écran d’accueil ».'],
+        },
+        it: {
+            title: 'Istruzioni', subtitle: 'Come funziona l’app Video Feedback', close: 'Ho capito',
+            delay: ['Impostare il ritardo', 'Con il cursore in basso scegli di quanti secondi è ritardata l’immagine della fotocamera (da 0 a 60 s). Dopo l’avvio occorre attendere altrettanto perché il buffer si riempia.'],
+            split: ['Due viste', 'Il pulsante con il rettangolo diviso mostra due volte la stessa fotocamera. Ogni vista ha il proprio cursore, pausa, rallentatore e zoom – ad es. vedere un movimento dopo 5 s e di nuovo dopo 15 s.'],
+            scrub: ['Avanti e indietro nel tempo', 'Scorri con un dito verso sinistra per andare più indietro, verso destra per avvicinarti al presente. La freccia rotonda accanto al tempo ripristina il ritardo impostato.'],
+            pause: ['Pausa e fermo immagine', 'Il pulsante blu blocca l’immagine. In pausa, scorrere percorre con precisione la registrazione. Premi di nuovo per riprendere dallo stesso punto. Al computer: barra spaziatrice e frecce ← / → per l’ultima vista toccata.'],
+            slow: ['Rallentatore', 'Il pulsante velocità passa tra 1x, ½x e ¼x. Al rallentatore il ritardo cresce continuamente – la freccia rotonda torna al ritardo impostato e a 1x.'],
+            zoom: ['Zoom e spostamento', 'Allarga due dita per ingrandire, sposta l’immagine con due dita. Ogni vista ha il proprio zoom.'],
+            camera: ['Cambiare fotocamera', 'Il pulsante fotocamera in alto a destra passa dalla fotocamera posteriore a quella anteriore. Quella anteriore è mostrata come uno specchio.'],
+            grid: ['Griglia', 'Il pulsante griglia mostra una griglia di 4, 6, 8 o 10 campi per valutare postura e movimento. Premi di nuovo per passare alla successiva, l’ultima volta la disattiva.'],
+            rotate: ['Verticale e orizzontale', 'Basta ruotare il dispositivo: l’immagine resta visibile per intero; due viste sono una sopra l’altra in verticale e affiancate in orizzontale.'],
+            fullscreen: ['Schermo intero e display', 'Il pulsante schermo intero usa tutto lo schermo. Lo schermo resta acceso finché l’app è aperta. Su iPhone aggiungi l’app con «Condividi › Aggiungi alla schermata Home».'],
+        },
+    };
+
+    // Beschriftungen der Hauptansicht und Tooltips
+    const UI_TEXT = {
+        de: { delay: 'Verzögerung', frozen: 'Standbild', starting: 'Kamera wird gestartet…', buffering: 'Puffer füllt sich…',
+              camError: 'Kamera nicht verfügbar. Bitte den Kamerazugriff im Browser erlauben und die Seite neu laden.',
+              fullscreen: 'Vollbild', split: 'Zwei Ansichten ein / aus', grid: 'Raster', info: 'Info', camera: 'Kamera wechseln',
+              pause: 'Pause / Standbild', play: 'Weiter abspielen', speed: 'Tempo (Zeitlupe)', reset: 'Zurück zur eingestellten Verzögerung' },
+        en: { delay: 'Delay', frozen: 'Freeze frame', starting: 'Starting camera…', buffering: 'Filling buffer…',
+              camError: 'Camera not available. Please allow camera access in the browser and reload the page.',
+              fullscreen: 'Full screen', split: 'Two views on / off', grid: 'Grid', info: 'Info', camera: 'Switch camera',
+              pause: 'Pause / freeze frame', play: 'Continue', speed: 'Speed (slow motion)', reset: 'Back to the set delay' },
+        fr: { delay: 'Décalage', frozen: 'Arrêt sur image', starting: 'Démarrage de la caméra…', buffering: 'Remplissage du tampon…',
+              camError: 'Caméra indisponible. Autorisez l’accès à la caméra dans le navigateur et rechargez la page.',
+              fullscreen: 'Plein écran', split: 'Deux vues oui / non', grid: 'Grille', info: 'Info', camera: 'Changer de caméra',
+              pause: 'Pause / arrêt sur image', play: 'Reprendre', speed: 'Vitesse (ralenti)', reset: 'Revenir au décalage réglé' },
+        it: { delay: 'Ritardo', frozen: 'Fermo immagine', starting: 'Avvio della fotocamera…', buffering: 'Riempimento del buffer…',
+              camError: 'Fotocamera non disponibile. Consenti l’accesso alla fotocamera nel browser e ricarica la pagina.',
+              fullscreen: 'Schermo intero', split: 'Due viste sì / no', grid: 'Griglia', info: 'Info', camera: 'Cambiare fotocamera',
+              pause: 'Pausa / fermo immagine', play: 'Riprendi', speed: 'Velocità (rallentatore)', reset: 'Torna al ritardo impostato' },
+    };
+
+    const APP_LANGS = ['de', 'en', 'fr', 'it'];
+    let appLang = 'de';
+
+    // =================================================================
+    // ANSICHTEN (Panes): jede mit eigener Verzögerung und Steuerung
+    // =================================================================
+    const SPEED_LABEL = { 1: '1x', 0.5: '½x', 0.25: '¼x' };
+    const panes = [];
+    let activePane = null;   // zuletzt berührte Ansicht (für die Tastatur)
+
+    function createPane(index) {
+        const el = document.getElementById('pane-template').content.firstElementChild.cloneNode(true);
+        workbench.appendChild(el);
+        const q = sel => el.querySelector(sel);
+        const p = {
+            index, el,
+            canvas: q('canvas'),
+            ctx: q('canvas').getContext('2d', { alpha: false }),
+            gridEl: q('.grid-overlay'),
+            statusEl: q('.status-msg'),
+            statusText: q('.status-text'),
+            spinner: q('.spinner'),
+            timer: q('.delay-timer'),
+            label: q('.timer-label'),
+            slider: q('.delay-slider'),
+            resetBtn: q('.reset-btn'),
+            speedBtn: q('.speed-btn'),
+            pauseBtn: q('.pause-btn'),
+            iconPause: q('.icon-pause'),
+            iconPlay: q('.icon-play'),
+            delaySec: CONFIG.defaultDelays[index],
+            lag: CONFIG.defaultDelays[index],
+            rate: 1,
+            paused: false,
+            pausedAt: 0,
+            zoom: 1,
+            panX: 0,
+            panY: 0,
+            lastTimerText: ''
+        };
+
+        p.slider.addEventListener('input', () => {
+            p.delaySec = parseFloat(p.slider.value);
+            p.lag = p.delaySec;
+            activePane = p;
+        });
+        p.slider.addEventListener('change', saveSettings);
+        p.pauseBtn.addEventListener('click', () => { activePane = p; setPaused(p, !p.paused); });
+        p.speedBtn.addEventListener('click', () => { activePane = p; cycleSpeed(p); });
+        p.resetBtn.addEventListener('click', () => { activePane = p; resetPlayback(p); });
+        el.addEventListener('pointerdown', () => { activePane = p; });
+        attachTouch(p);
+
+        // Canvas-Grösse folgt der Ansicht (Drehen, Teilen, Vollbild) - ohne
+        // auf window.resize zu warten, das auf iOS beim Drehen zu früh kommt
+        new ResizeObserver(() => sizeCanvas(p)).observe(el);
+        sizeCanvas(p);
+        return p;
+    }
+
+    function sizeCanvas(p) {
+        const dpr = window.devicePixelRatio || 1;
+        const w = Math.max(1, Math.round(p.el.clientWidth * dpr));
+        const h = Math.max(1, Math.round(p.el.clientHeight * dpr));
+        // Nur bei echter Änderung setzen: width/height löschen das Canvas
+        if (p.canvas.width !== w || p.canvas.height !== h) {
+            p.canvas.width = w;
+            p.canvas.height = h;
+            drawPane(p, performance.now());   // sofort neu zeichnen, kein Flackern
         }
     }
 
-    function resizeCanvas() {
-        canvas.width = window.innerWidth * window.devicePixelRatio;
-        canvas.height = window.innerHeight * window.devicePixelRatio;
+    function setViews(n) {
+        state.views = n === 2 ? 2 : 1;
+        panes[1].el.hidden = state.views < 2;
+        appEl.classList.toggle('dual', state.views === 2);
+        splitBtn.classList.toggle('on', state.views === 2);
+        splitBtn.setAttribute('aria-pressed', String(state.views === 2));
+        if (state.views < 2 && activePane === panes[1]) activePane = panes[0];
+        updateShortLayout();
     }
+
+    // Wenig Höhe (Handy quer): kompakte Steuerung
+    function updateShortLayout() {
+        appEl.classList.toggle('short', window.innerHeight < 500);
+        // Trennlinie im Icon zeigt, wie geteilt wird
+        const landscape = window.innerWidth >= window.innerHeight;
+        document.getElementById('split-line').setAttribute('d', landscape ? 'M12 4v16' : 'M3 12h18');
+    }
+
+    // =================================================================
+    // EINSTELLUNGEN MERKEN
+    // =================================================================
+    const SETTINGS_KEY = 'videoDelaySettings';
+    const validDelay = v => typeof v === 'number' && v >= 0 && v <= CONFIG.maxDelaySec;
+
+    function loadSettings() {
+        let s = {};
+        try { s = JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}') || {}; } catch (e) { /* blocked or invalid */ }
+        const delays = Array.isArray(s.delays) ? s.delays : (validDelay(s.delaySec) ? [s.delaySec] : []);
+        panes.forEach((p, i) => {
+            if (validDelay(delays[i])) p.delaySec = delays[i];
+            p.lag = p.delaySec;
+            p.slider.value = p.delaySec;
+        });
+        if (Number.isInteger(s.gridMode) && s.gridMode >= 0 && s.gridMode <= 4) state.gridMode = s.gridMode;
+        if (s.facing === 'user' || s.facing === 'environment') state.facing = s.facing;
+        if (APP_LANGS.includes(s.lang)) appLang = s.lang;
+        setViews(s.views === 2 ? 2 : 1);
+    }
+
+    function saveSettings() {
+        try {
+            localStorage.setItem(SETTINGS_KEY, JSON.stringify({
+                delays: panes.map(p => p.delaySec), views: state.views,
+                gridMode: state.gridMode, facing: state.facing, lang: appLang
+            }));
+        } catch (e) { /* storage blocked */ }
+    }
+
+    // =================================================================
+    // KAMERA (inkl. Wechsel Rück-/Frontkamera)
+    // =================================================================
+    let currentStream = null;
+    let currentDeviceId = null;
+    let videoDevices = [];
+    let renderStarted = false;
+    let cameraError = false;
+
+    function stopCamera() {
+        if (currentStream) currentStream.getTracks().forEach(t => t.stop());
+        currentStream = null;
+    }
+
+    async function startCamera(deviceId) {
+        stopCamera();
+        cameraError = false;
+        const base = { width: { ideal: 1920 }, height: { ideal: 1080 } };
+        const attempts = deviceId
+            ? [{ ...base, deviceId: { exact: deviceId } }]
+            : [{ ...base, facingMode: { exact: state.facing } }, { ...base, facingMode: state.facing }];
+        let stream = null;
+        for (const constraints of attempts) {
+            try { stream = await navigator.mediaDevices.getUserMedia({ video: constraints, audio: false }); break; }
+            catch (e) { /* nächsten Versuch */ }
+        }
+        if (!stream) {
+            cameraError = true;
+            return false;
+        }
+        currentStream = stream;
+        const track = stream.getVideoTracks()[0];
+        const settings = track.getSettings ? track.getSettings() : {};
+        currentDeviceId = settings.deviceId || null;
+        // Frontkamera spiegeln (Desktop-Webcams melden oft keinen facingMode)
+        state.mirror = (settings.facingMode || state.facing) === 'user';
+        track.addEventListener('ended', () => { if (document.visibilityState === 'visible') startCamera(); });
+
+        video.srcObject = stream;
+        video.onloadedmetadata = () => {
+            video.play().catch(() => {});
+            if (!renderStarted) { renderStarted = true; requestAnimationFrame(renderLoop); }
+        };
+
+        // Kamera-Button nur zeigen, wenn es mehr als eine Kamera gibt
+        try {
+            videoDevices = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'videoinput');
+        } catch (e) { videoDevices = []; }
+        cameraBtn.hidden = videoDevices.length < 2;
+        requestWakeLock();
+        return true;
+    }
+
+    async function switchCamera() {
+        cameraBtn.disabled = true;
+        const prevId = currentDeviceId;
+        state.facing = state.facing === 'user' ? 'environment' : 'user';
+        await startCamera();
+        // Desktop mit zwei Webcams: facingMode hilft nicht, also die nächste Kamera nehmen
+        if (prevId && currentDeviceId === prevId && videoDevices.length > 1) {
+            const i = videoDevices.findIndex(d => d.deviceId === prevId);
+            await startCamera(videoDevices[(i + 1) % videoDevices.length].deviceId);
+        }
+        saveSettings();
+        cameraBtn.disabled = false;
+    }
+
+    // =================================================================
+    // BILDSCHIRM BLEIBT AN (Screen Wake Lock)
+    // =================================================================
+    let wakeLock = null;
+
+    async function requestWakeLock() {
+        if (!('wakeLock' in navigator) || wakeLock || document.visibilityState !== 'visible') return;
+        try {
+            wakeLock = await navigator.wakeLock.request('screen');
+            wakeLock.addEventListener('release', () => { wakeLock = null; });
+        } catch (e) { /* nicht erlaubt (z. B. Energiesparmodus) */ }
+    }
+
+    // =================================================================
+    // GEMEINSAMER PUFFER
+    // =================================================================
+    let captureBusy = false;
+    let captureEpoch = 0;   // erhöht bei Zeitverschiebung: verwirft Bilder, die gerade noch entstehen
+    let hiddenAt = null;
+    let windowStart = performance.now();   // Zeit des ältesten Bildes im normalen Puffer-Fenster
+
+    // Nur so viel Puffer behalten, wie die sichtbaren Ansichten brauchen
+    // (grösste Verzögerung bzw. in Zeitlupe gewachsene Verzögerung + Reserve)
+    function keepMs() {
+        let need = 0;
+        for (const p of panes) {
+            if (p.el.hidden) continue;
+            need = Math.max(need, p.delaySec, p.paused ? 0 : p.lag);
+        }
+        return Math.min(MAX_BUFFER_MS, (need + CONFIG.reserveSec) * 1000);
+    }
+
+    // Alte Bilder freigeben - ausser rund um das Standbild einer pausierten Ansicht
+    function trimBuffer(now) {
+        const keepFrom = now - keepMs();
+        if (!state.buffer.length || state.buffer[0].time >= keepFrom) return;
+        const keep = panes.filter(p => p.paused).map(p => {
+            const t = p.pausedAt - p.lag * 1000;
+            return [t - CONFIG.protectMs, t + CONFIG.protectMs];
+        });
+        if (!keep.length) {
+            while (state.buffer.length && state.buffer[0].time < keepFrom) state.buffer.shift().bitmap.close();
+            return;
+        }
+        state.buffer = state.buffer.filter(f => {
+            if (f.time >= keepFrom || keep.some(([a, b]) => f.time >= a && f.time <= b)) return true;
+            f.bitmap.close();
+            return false;
+        });
+    }
+
+    // Kamerabild verkleinert als ImageBitmap: Ein 1080p-Bild braucht 8 MB,
+    // ein 960er nur 2 MB. Erst über die Resize-Optionen von createImageBitmap,
+    // falls der Browser sie ignoriert (älteres Safari) über ein Hilfs-Canvas.
+    let resizeMode = 'options';
+    let scaleCanvas = null, scaleCtx = null;
+
+    function frameSize() {
+        const vw = video.videoWidth, vh = video.videoHeight;
+        if (!vw || !vh) return null;
+        const s = Math.min(1, CONFIG.maxFrameSide / Math.max(vw, vh));
+        return { w: Math.round(vw * s), h: Math.round(vh * s), scaled: s < 1 };
+    }
+
+    function bitmapViaCanvas(t) {
+        if (!scaleCanvas) {
+            scaleCanvas = document.createElement('canvas');
+            scaleCtx = scaleCanvas.getContext('2d', { alpha: false });
+        }
+        if (scaleCanvas.width !== t.w || scaleCanvas.height !== t.h) {
+            scaleCanvas.width = t.w;
+            scaleCanvas.height = t.h;
+        }
+        scaleCtx.drawImage(video, 0, 0, t.w, t.h);
+        return createImageBitmap(scaleCanvas);
+    }
+
+    function makeFrameBitmap() {
+        const t = frameSize();
+        if (!t) return Promise.reject(new Error('no video size'));
+        if (!t.scaled) return createImageBitmap(video);
+        if (resizeMode === 'canvas') return bitmapViaCanvas(t);
+        return createImageBitmap(video, { resizeWidth: t.w, resizeHeight: t.h, resizeQuality: 'medium' })
+            .then(b => {
+                if (b.width <= t.w + 1) return b;
+                b.close();                 // Optionen ignoriert: ab jetzt Canvas
+                resizeMode = 'canvas';
+                return bitmapViaCanvas(t);
+            })
+            .catch(() => { resizeMode = 'canvas'; return bitmapViaCanvas(t); });
+    }
+
+    function captureFrame(now) {
+        if (captureBusy || hiddenAt !== null || !currentStream) return;
+        if (video.readyState < video.HAVE_CURRENT_DATA) return;
+        // 4 ms Toleranz: Bei 60 Hz kommt requestAnimationFrame alle ~16,7 ms.
+        // Ohne Toleranz verpasst 33,3 ms wegen Rundung oft knapp den zweiten
+        // Takt und es wurden nur ~22 statt 30 Bilder pro Sekunde aufgenommen.
+        if (now - state.lastCapture < 1000 / CONFIG.fps - 4) return;
+        state.lastCapture = now;
+        captureBusy = true;
+        const epoch = captureEpoch;
+        const mirror = state.mirror;
+        makeFrameBitmap().then(bitmap => {
+            captureBusy = false;
+            if (epoch !== captureEpoch) { bitmap.close(); return; }
+            state.buffer.push({ bitmap, time: now, mirror });
+            trimBuffer(now);
+        }).catch(() => { captureBusy = false; });
+    }
+
+    // Alle Zeitstempel verschieben: Nach dem Hintergrund läuft das verzögerte
+    // Bild nahtlos dort weiter, wo es aufgehört hat.
+    function shiftTime(ms) {
+        for (const f of state.buffer) f.time += ms;
+        for (const p of panes) if (p.paused) p.pausedAt += ms;
+        captureEpoch++;
+    }
+
+    function updateWindowStart(now) {
+        const from = now - keepMs();
+        windowStart = now;
+        for (const f of state.buffer) { if (f.time >= from) { windowStart = f.time; break; } }
+    }
+
+    const refTime = (p, now) => p.paused ? p.pausedAt : now;
+
+    // Index des angezeigten Bildes (neuestes Bild mit time <= Zielzeit)
+    function frameIndexAt(target) {
+        const buf = state.buffer;
+        for (let i = buf.length - 1; i >= 0; i--) {
+            if (buf[i].time <= target + 0.5) return i;
+        }
+        return -1;
+    }
+
+    function maxLag(p, now) {
+        // Standbild: so weit zurück, wie Bilder da sind. Laufend: im normalen
+        // Fenster bleiben, darf aber die eingestellte Verzögerung erreichen
+        // (Puffer füllt sich noch).
+        if (p.paused) return state.buffer.length ? Math.max(0, (p.pausedAt - state.buffer[0].time) / 1000) : 0;
+        return Math.max((now - windowStart) / 1000, p.delaySec);
+    }
+
+    // =================================================================
+    // PAUSE / STANDBILD, ZEITLUPE, RESET (pro Ansicht)
+    // =================================================================
+    function setPaused(p, paused) {
+        if (paused === p.paused) return;
+        const now = performance.now();
+        if (paused) {
+            p.pausedAt = now;
+            p.paused = true;
+        } else {
+            // An derselben Stelle weiter: die Verzögerung wächst um die Pausendauer
+            p.lag += (now - p.pausedAt) / 1000;
+            p.paused = false;
+            p.lag = Math.min(p.lag, maxLag(p, now));
+        }
+        updateControls(p);
+    }
+
+    function cycleSpeed(p) {
+        const i = CONFIG.speeds.indexOf(p.rate);
+        p.rate = CONFIG.speeds[(i + 1) % CONFIG.speeds.length];
+        updateControls(p);
+    }
+
+    function resetPlayback(p) {
+        setPaused(p, false);
+        p.rate = 1;
+        p.lag = p.delaySec;
+        updateControls(p);
+    }
+
+    function stepFrame(p, dir) {   // dir -1 = älter, +1 = neuer
+        if (!p.paused) setPaused(p, true);
+        if (!state.buffer.length) return;
+        let idx = frameIndexAt(p.pausedAt - p.lag * 1000);
+        if (idx < 0) idx = 0;
+        // Höherer Index = neueres Bild = kleinere Verzögerung
+        const target = Math.max(0, Math.min(state.buffer.length - 1, idx + dir));
+        p.lag = Math.max(0, (p.pausedAt - state.buffer[target].time) / 1000);
+    }
+
+    function updateControls(p) {
+        const ui = UI_TEXT[appLang];
+        p.iconPause.style.display = p.paused ? 'none' : '';
+        p.iconPlay.style.display = p.paused ? '' : 'none';
+        p.pauseBtn.title = ui[p.paused ? 'play' : 'pause'];
+        p.pauseBtn.setAttribute('aria-label', p.pauseBtn.title);
+        p.pauseBtn.setAttribute('aria-pressed', String(p.paused));
+        p.speedBtn.textContent = SPEED_LABEL[p.rate];
+        p.speedBtn.classList.toggle('slow', p.rate !== 1);
+        p.timer.classList.toggle('frozen', p.paused);
+        p.label.textContent = p.paused ? ui.frozen : ui.delay;
+    }
+
+    // =================================================================
+    // DARSTELLUNG
+    // =================================================================
+    function showStatus(p, text, spinner) {
+        p.statusEl.hidden = false;
+        p.spinner.style.display = spinner ? '' : 'none';
+        if (p.statusText.textContent !== text) p.statusText.textContent = text;
+    }
+
+    function drawPane(p, now) {
+        const ui = UI_TEXT[appLang];
+        if (cameraError) { showStatus(p, ui.camError, false); return; }
+        if (!state.buffer.length) { showStatus(p, ui.starting, true); return; }
+
+        let idx = frameIndexAt(refTime(p, now) - p.lag * 1000);
+        if (idx < 0) {
+            const span = (refTime(p, now) - state.buffer[0].time) / 1000;
+            const pct = p.lag > 0 ? Math.min(100, Math.round(span / p.lag * 100)) : 100;
+            showStatus(p, `${ui.buffering} ${pct}%`, true);
+            idx = 0;
+        } else {
+            p.statusEl.hidden = true;
+        }
+
+        const frame = state.buffer[idx];
+        const b = frame.bitmap;
+        const cw = p.canvas.width, ch = p.canvas.height;
+        const dpr = window.devicePixelRatio || 1;
+        // Ganzes Bild zeigen (contain): Nach dem Drehen haben die Bilder im
+        // Puffer noch das alte Seitenverhältnis - so wird nichts abgeschnitten
+        const scale = Math.min(cw / b.width, ch / b.height) * p.zoom;
+        const dw = b.width * scale, dh = b.height * scale;
+        // Verschieben nur so weit, dass das gezoomte Bild die Ansicht nicht verlässt
+        const maxPX = Math.max(0, (dw - cw) / 2) / dpr;
+        const maxPY = Math.max(0, (dh - ch) / 2) / dpr;
+        p.panX = Math.max(-maxPX, Math.min(maxPX, p.panX));
+        p.panY = Math.max(-maxPY, Math.min(maxPY, p.panY));
+        const x = (cw - dw) / 2 + (frame.mirror ? -p.panX : p.panX) * dpr;
+        const y = (ch - dh) / 2 + p.panY * dpr;
+
+        const ctx = p.ctx;
+        ctx.save();
+        ctx.fillStyle = '#000';
+        ctx.fillRect(0, 0, cw, ch);
+        if (frame.mirror) { ctx.translate(cw, 0); ctx.scale(-1, 1); }
+        ctx.drawImage(b, x, y, dw, dh);
+        ctx.restore();
+    }
+
+    let lastTs = null;
 
     function renderLoop(now) {
         requestAnimationFrame(renderLoop);
+        const dt = lastTs === null ? 0 : Math.min(0.1, (now - lastTs) / 1000);
+        lastTs = now;
 
-        if (video.readyState === video.HAVE_ENOUGH_DATA) {
-            if (now - state.lastRequestTime >= (1000 / CONFIG.fps)) {
-                state.lastRequestTime = now;
-                createImageBitmap(video).then(bitmap => {
-                    state.buffer.push({ bitmap: bitmap, time: now });
-                    const maxBufferSizeMs = (CONFIG.maxDelaySec + 10) * 1000;
-                    while (state.buffer.length > 0 && (now - state.buffer[0].time > maxBufferSizeMs)) {
-                        const old = state.buffer.shift();
-                        old.bitmap.close();
-                    }
-                });
-            }
+        captureFrame(now);
+        updateWindowStart(now);
+
+        for (const p of panes) {
+            if (p.el.hidden) continue;
+            // Zeitlupe: das Bild läuft langsamer als die Zeit, die Verzögerung wächst
+            if (!p.paused && p.rate !== 1) p.lag += (1 - p.rate) * dt;
+            p.lag = Math.max(0, Math.min(maxLag(p, now), p.lag));
+
+            // Reset-Button nur bei Abweichung von der eingestellten Verzögerung
+            p.resetBtn.hidden = !(p.paused || p.rate !== 1 || Math.abs(p.lag - p.delaySec) > 0.05);
+            const timerText = p.lag.toFixed(1) + 's';
+            if (timerText !== p.lastTimerText) { p.timer.textContent = timerText; p.lastTimerText = timerText; }
+
+            drawPane(p, now);
         }
-
-        if (state.buffer.length < 5) {
-            statusMsg.classList.remove('hidden');
-            return;
-        }
-
-        const totalRequestedDelayMs = (state.delaySec + state.scrubbingOffset) * 1000;
-        const targetTime = now - totalRequestedDelayMs;
-
-        let selectedFrame = null;
-        for (let i = state.buffer.length - 1; i >= 0; i--) {
-            if (state.buffer[i].time <= targetTime) {
-                selectedFrame = state.buffer[i];
-                break;
-            }
-        }
-
-        if (!selectedFrame) {
-            statusMsg.classList.remove('hidden');
-            const fillStatus = (state.buffer.length / (state.delaySec * CONFIG.fps) * 100).toFixed(0);
-            statusText.innerText = `Puffer füllt sich... ${Math.min(100, fillStatus)}%`;
-            selectedFrame = state.buffer[0];
-        } else {
-            statusMsg.classList.add('hidden');
-        }
-
-        if (selectedFrame) {
-            const b = selectedFrame.bitmap;
-            ctx.save();
-            const baseScale = Math.max(canvas.width / b.width, canvas.height / b.height);
-            const totalScale = baseScale * state.currentZoom;
-            const drawWidth = b.width * totalScale;
-            const drawHeight = b.height * totalScale;
-            const x = (canvas.width - drawWidth) / 2 + (state.panX * window.devicePixelRatio);
-            const y = (canvas.height - drawHeight) / 2 + (state.panY * window.devicePixelRatio);
-            ctx.drawImage(b, x, y, drawWidth, drawHeight);
-            ctx.restore();
-        }
-        
-        const displayDelay = Math.max(0, state.delaySec + state.scrubbingOffset);
-        delayTimer.innerText = displayDelay.toFixed(1) + "s";
     }
 
-    delaySlider.oninput = function() {
-        state.delaySec = parseFloat(this.value);
-        state.scrubbingOffset = 0; 
-    };
+    // =================================================================
+    // GESTEN PRO ANSICHT: Wischen (Zeit), Pinch (Zoom + Verschieben)
+    // =================================================================
+    function attachTouch(p) {
+        let lastX = 0, lastPinchDist = 0, lastMidX = 0, lastMidY = 0;
+        const c = p.canvas;
+        const pinch = t => ({
+            dist: Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY),
+            x: (t[0].clientX + t[1].clientX) / 2,
+            y: (t[0].clientY + t[1].clientY) / 2
+        });
 
-    let lastX = 0;
-    let lastPinchDist = 0;
-    let lastPinchMidX = 0;
-    let lastPinchMidY = 0;
-
-    canvas.addEventListener('touchstart', e => {
-        if (e.touches.length === 1) {
-            lastX = e.touches[0].clientX;
-        } else if (e.touches.length === 2) {
-            lastPinchDist = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
-            lastPinchMidX = (e.touches[0].clientX + e.touches[1].clientX) / 2;
-            lastPinchMidY = (e.touches[0].clientY + e.touches[1].clientY) / 2;
-        }
-    }, { passive: false });
-
-    canvas.addEventListener('touchmove', e => {
-        e.preventDefault();
-        if (e.touches.length === 1) {
-            const deltaX = lastX - e.touches[0].clientX;
-            state.scrubbingOffset += deltaX * CONFIG.touchSensitivityX;
-            if (state.delaySec + state.scrubbingOffset < 0) state.scrubbingOffset = -state.delaySec;
-            lastX = e.touches[0].clientX;
-        } 
-        else if (e.touches.length === 2) {
-            const currentDist = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
-            const zoomDelta = (currentDist - lastPinchDist) * CONFIG.zoomSensitivity;
-            state.currentZoom = Math.max(CONFIG.minZoom, Math.min(CONFIG.maxZoom, state.currentZoom + zoomDelta));
-            const currentMidX = (e.touches[0].clientX + e.touches[1].clientX) / 2;
-            const currentMidY = (e.touches[0].clientY + e.touches[1].clientY) / 2;
-            if (state.currentZoom > 1.0) {
-                state.panX += (currentMidX - lastPinchMidX) * CONFIG.panSensitivity;
-                state.panY += (currentMidY - lastPinchMidY) * CONFIG.panSensitivity;
-                const limitX = (canvas.width / 2) * state.currentZoom;
-                const limitY = (canvas.height / 2) * state.currentZoom;
-                state.panX = Math.max(-limitX, Math.min(limitX, state.panX));
-                state.panY = Math.max(-limitY, Math.min(limitY, state.panY));
-            } else {
-                state.panX = 0; state.panY = 0;
+        c.addEventListener('touchstart', e => {
+            activePane = p;
+            if (e.touches.length === 1) {
+                lastX = e.touches[0].clientX;
+            } else if (e.touches.length === 2) {
+                const m = pinch(e.touches);
+                lastPinchDist = m.dist; lastMidX = m.x; lastMidY = m.y;
             }
-            lastPinchDist = currentDist;
-            lastPinchMidX = currentMidX;
-            lastPinchMidY = currentMidY;
+        }, { passive: false });
+
+        // Nach Pinch mit einem Finger weiter: Startpunkt neu setzen, kein Sprung
+        c.addEventListener('touchend', e => {
+            if (e.touches.length === 1) lastX = e.touches[0].clientX;
+        });
+
+        c.addEventListener('touchmove', e => {
+            e.preventDefault();
+            if (e.touches.length === 1) {
+                const deltaX = lastX - e.touches[0].clientX;
+                const sens = p.paused ? CONFIG.pausedSensitivityX : CONFIG.touchSensitivityX;
+                p.lag = Math.max(0, Math.min(maxLag(p, performance.now()), p.lag + deltaX * sens));
+                lastX = e.touches[0].clientX;
+            } else if (e.touches.length === 2) {
+                const m = pinch(e.touches);
+                p.zoom = Math.max(CONFIG.minZoom, Math.min(CONFIG.maxZoom, p.zoom + (m.dist - lastPinchDist) * CONFIG.zoomSensitivity));
+                if (p.zoom > 1.0) {
+                    p.panX += (m.x - lastMidX) * CONFIG.panSensitivity;
+                    p.panY += (m.y - lastMidY) * CONFIG.panSensitivity;
+                } else {
+                    p.panX = 0; p.panY = 0;
+                }
+                lastPinchDist = m.dist; lastMidX = m.x; lastMidY = m.y;
+            }
+        }, { passive: false });
+    }
+
+    // =================================================================
+    // RASTER, VOLLBILD, ZWEI ANSICHTEN
+    // =================================================================
+    function renderGrid() {
+        const divisions = [0, 4, 6, 8, 10][state.gridMode];
+        for (const p of panes) {
+            p.gridEl.innerHTML = '';
+            for (let i = 1; i < divisions; i++) {
+                const v = document.createElement('div');
+                v.className = 'grid-line';
+                v.style.width = '1px'; v.style.height = '100%'; v.style.left = (100 / divisions * i) + '%';
+                p.gridEl.appendChild(v);
+                const h = document.createElement('div');
+                h.className = 'grid-line';
+                h.style.height = '1px'; h.style.width = '100%'; h.style.top = (100 / divisions * i) + '%';
+                p.gridEl.appendChild(h);
+            }
         }
-    }, { passive: false });
+    }
 
     function toggleGrid() {
         state.gridMode = (state.gridMode + 1) % 5;
-        gridOverlay.innerHTML = '';
-        if (state.gridMode === 0) {
-            gridOverlay.classList.add('hidden');
-            return;
-        }
-        gridOverlay.classList.remove('hidden');
-        const divisionsList = [0, 4, 6, 8, 10]; 
-        const divisions = divisionsList[state.gridMode];
+        renderGrid();
+        saveSettings();
+    }
 
-        for (let i = 1; i < divisions; i++) {
-            const v = document.createElement('div');
-            v.className = 'grid-line';
-            v.style.width = '1px'; v.style.height = '100%'; v.style.left = (100/divisions*i)+'%';
-            gridOverlay.appendChild(v);
-            const h = document.createElement('div');
-            h.className = 'grid-line';
-            h.style.height = '1px'; h.style.width = '100%'; h.style.top = (100/divisions*i)+'%';
-            gridOverlay.appendChild(h);
+    function toggleSplit() {
+        setViews(state.views === 2 ? 1 : 2);
+        saveSettings();
+    }
+
+    function toggleFullscreen() {
+        const el = document.documentElement;
+        if (!document.fullscreenElement && !document.webkitFullscreenElement) {
+            (el.requestFullscreen || el.webkitRequestFullscreen || (() => {})).call(el);
+        } else {
+            (document.exitFullscreen || document.webkitExitFullscreen || (() => {})).call(document);
         }
     }
 
-    document.getElementById('grid-btn').onclick = toggleGrid;
-    document.getElementById('fullscreen-btn').onclick = () => {
-        if (!document.fullscreenElement) document.documentElement.requestFullscreen();
-        else document.exitFullscreen();
-    };
+    // =================================================================
+    // SPRACHE, WILLKOMMEN, INFO
+    // =================================================================
+    const helpScreen = document.getElementById('help-screen');
+    let helpOpen = false;
+    let whatsNewOpen = false;
 
-    window.onload = () => {
-        resizeCanvas();
-        initCamera();
-    };
-    window.onresize = resizeCanvas;
+    function fillList(listEl, order, texts) {
+        listEl.innerHTML = '';
+        order.forEach(([key, icon]) => {
+            const [title, desc] = texts[key];
+            const li = document.createElement('li');
+            li.innerHTML = '<div class="wn-icon"><svg fill="none" stroke="currentColor" stroke-width="2" ' +
+                'stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24">' + ICONS[icon] +
+                '</svg></div><div><strong></strong><span></span></div>';
+            // textContent: no HTML injection
+            li.querySelector('strong').textContent = title;
+            li.querySelector('span').textContent = desc;
+            listEl.appendChild(li);
+        });
+    }
+
+    function applyLanguage() {
+        document.documentElement.lang = appLang;
+        const wn = document.getElementById('whats-new');
+        if (wn) {
+            const t = WHATS_NEW_TEXT[appLang];
+            wn.setAttribute('lang', appLang);
+            wn.querySelectorAll('[data-i18n]').forEach(n => { n.textContent = t[n.dataset.i18n]; });
+            fillList(document.getElementById('wn-list'), WHATS_NEW_ITEMS, t);
+        }
+        const h = HELP_TEXT[appLang];
+        helpScreen.setAttribute('lang', appLang);
+        helpScreen.querySelectorAll('[data-help]').forEach(n => { n.textContent = h[n.dataset.help]; });
+        fillList(document.getElementById('help-list'), HELP_ITEMS, h);
+
+        document.querySelectorAll('.wn-lang button').forEach(btn => {
+            const active = btn.dataset.lang === appLang;
+            btn.classList.toggle('active', active);
+            btn.setAttribute('aria-pressed', String(active));
+        });
+        document.querySelectorAll('[data-ui-title]').forEach(btn => {
+            btn.title = UI_TEXT[appLang][btn.dataset.uiTitle];
+            btn.setAttribute('aria-label', btn.title);
+        });
+        panes.forEach(updateControls);
+    }
+
+    function setAppLanguage(lang) {
+        appLang = APP_LANGS.includes(lang) ? lang : 'de';
+        saveSettings();
+        applyLanguage();
+    }
+
+    document.querySelectorAll('.wn-lang button').forEach(btn =>
+        btn.addEventListener('click', () => setAppLanguage(btn.dataset.lang)));
+
+    function openHelp() {
+        if (helpOpen) return;
+        helpOpen = true;
+        helpScreen.classList.remove('closing');
+        helpScreen.hidden = false;
+        helpScreen.scrollTop = 0;
+    }
+
+    function closeHelp() {
+        if (!helpOpen) return;
+        helpOpen = false;
+        helpScreen.classList.add('closing');
+        setTimeout(() => { if (!helpOpen) helpScreen.hidden = true; }, 400);
+    }
+
+    function closeWhatsNew() {
+        if (!whatsNewOpen) return;
+        whatsNewOpen = false;
+        try { localStorage.setItem('videoDelayWhatsNewSeen', WHATS_NEW_VERSION); } catch (e) { /* storage blocked */ }
+        const el = document.getElementById('whats-new');
+        el.classList.add('closing');
+        setTimeout(() => el.remove(), 400);
+        startApp();
+    }
+
+    // =================================================================
+    // START
+    // =================================================================
+    let appStarted = false;
+
+    async function startApp() {
+        if (appStarted) return;
+        appStarted = true;
+        panes.forEach(p => showStatus(p, UI_TEXT[appLang].starting, true));
+        if (!(await startCamera())) panes.forEach(p => showStatus(p, UI_TEXT[appLang].camError, false));
+    }
+
+    document.getElementById('grid-btn').onclick = toggleGrid;
+    document.getElementById('fullscreen-btn').onclick = toggleFullscreen;
+    document.getElementById('info-btn').onclick = openHelp;
+    document.getElementById('help-close').onclick = closeHelp;
+    document.getElementById('wn-start').onclick = closeWhatsNew;
+    splitBtn.onclick = toggleSplit;
+    cameraBtn.onclick = switchCamera;
+
+    window.addEventListener('keydown', e => {
+        if (whatsNewOpen) {
+            if (['Enter', 'NumpadEnter', 'Space', 'Escape'].includes(e.code)) { e.preventDefault(); closeWhatsNew(); }
+            return;
+        }
+        if (helpOpen) {
+            if (['Enter', 'NumpadEnter', 'Escape'].includes(e.code)) { e.preventDefault(); closeHelp(); }
+            return;
+        }
+        if (e.ctrlKey || e.metaKey || e.altKey) return;
+        // Pfeiltasten auf einem Schieber nicht abfangen
+        if (e.target.classList && e.target.classList.contains('delay-slider') && e.code.startsWith('Arrow')) return;
+        const p = activePane || panes[0];
+        if (e.code === 'Space') { e.preventDefault(); setPaused(p, !p.paused); }
+        else if (e.code === 'ArrowLeft') { e.preventDefault(); stepFrame(p, -1); }
+        else if (e.code === 'ArrowRight') { e.preventDefault(); stepFrame(p, 1); }
+    });
+
+    // Hintergrund: Kamera liefert keine Bilder - danach nahtlos weiter,
+    // Kamera bei Bedarf neu starten und Wake Lock neu anfordern
+    document.addEventListener('visibilitychange', () => {
+        const now = performance.now();
+        if (document.visibilityState === 'hidden') {
+            hiddenAt = now;
+            return;
+        }
+        if (hiddenAt !== null) { shiftTime(now - hiddenAt); hiddenAt = null; }
+        const track = currentStream && currentStream.getVideoTracks()[0];
+        if (appStarted && !cameraError && (!track || track.readyState === 'ended')) startCamera();
+        requestWakeLock();
+    });
+
+    // Drehen: Layout sofort anpassen; die Canvas-Grössen folgen über
+    // ResizeObserver. iOS meldet die neue Grösse teils erst verzögert,
+    // daher zusätzlich kurz nach dem Drehen nochmals prüfen.
+    function onViewportChange() {
+        updateShortLayout();
+        panes.forEach(sizeCanvas);
+    }
+    window.addEventListener('resize', onViewportChange);
+    if (screen.orientation) screen.orientation.addEventListener('change', () => {
+        onViewportChange();
+        setTimeout(onViewportChange, 300);
+    });
+    window.addEventListener('orientationchange', () => setTimeout(onViewportChange, 300));
+    if (window.visualViewport) window.visualViewport.addEventListener('resize', onViewportChange);
+
+    panes.push(createPane(0), createPane(1));
+    activePane = panes[0];
+    loadSettings();
+    renderGrid();
+    applyLanguage();
+
+    (function initWhatsNew() {
+        let seen = null;
+        try { seen = localStorage.getItem('videoDelayWhatsNewSeen'); } catch (e) { /* storage blocked */ }
+        if (seen === WHATS_NEW_VERSION) {
+            document.getElementById('whats-new').remove();
+            startApp();   // Kamera startet schon hinter dem Splash
+        } else {
+            whatsNewOpen = true;   // Kamera startet mit "Los geht's"
+        }
+    })();
+
+    // Splash nach 2 s ausblenden
+    window.addEventListener('load', () => {
+        setTimeout(() => {
+            const splash = document.getElementById('splash-screen');
+            splash.classList.add('fade');
+            setTimeout(() => splash.remove(), 600);
+        }, 2000);
+    });
 </script>
 </body>
 </html>
